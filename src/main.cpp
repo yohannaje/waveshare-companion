@@ -302,6 +302,36 @@ static float bgHour = -100;
 static int cam = 0;
 static St conv = IDLE; static bool inConv = false; static uint32_t convStart = 0; static bool holding = false;
 static bool portalActive = false, timeStarted = false;
+static String answer = "";
+static const char *ROOM_NAMES[4] = {"el bano", "la cocina", "el living", "el patio"};
+
+// Cartel de texto abajo (mismo estilo que el del WiFi). Corta en palabras, hasta 3 renglones de 17 letras.
+static void drawBubble(const String &txt) {
+  const int maxc = 17, maxLines = 3;
+  String lines[maxLines]; int n = 0; String cur = "";
+  int i = 0;
+  while (i <= (int)txt.length() && n < maxLines) {
+    int sp = txt.indexOf(' ', i); if (sp < 0) sp = txt.length();
+    String w = txt.substring(i, sp);
+    if (cur.length() == 0) cur = w;
+    else if ((int)(cur.length() + 1 + w.length()) <= maxc) cur += " " + w;
+    else { lines[n++] = cur; cur = w; }
+    i = sp + 1;
+  }
+  if (n < maxLines && cur.length()) lines[n++] = cur;
+  int h = 16 + n * 20, y0 = 6;  // arriba, para no tapar al personaje
+  canvas->fillRoundRect(8, y0, 224, h, 10, RGB565_WHITE);
+  canvas->drawRoundRect(8, y0, 224, h, 10, C(0x2e2430));
+  canvas->setTextColor(C(0x2e2430)); canvas->setTextSize(2);
+  for (int k = 0; k < n; k++) { canvas->setCursor(18, y0 + 9 + k * 20); canvas->print(lines[k]); }
+}
+static String localAnswer(float h, int idx) {
+  char b[64];
+  time_t now = time(nullptr);
+  if (now < 1700000000) snprintf(b, sizeof(b), "Hola! Todavia no tengo hora: falta el WiFi");
+  else { struct tm lt; localtime_r(&now, &lt); snprintf(b, sizeof(b), "Son las %02d:%02d. Estoy en %s.", lt.tm_hour, lt.tm_min, ROOM_NAMES[idx]); }
+  return String(b);
+}
 
 static void buildBg(float h) {
   S = &bgS; gA = 255;
@@ -402,9 +432,9 @@ void loop() {
   if (inConv) {
     uint32_t el = ms - convStart;
     ch.state = conv;
-    if (conv == THINK && el > 1200) { conv = TALK; convStart = ms; voice::play(voice::CHATTER); }   // todavía sin cerebro: contesta en "ardilla"
+    if (conv == THINK && el > 1200) { conv = TALK; convStart = ms; answer = localAnswer(h, idx); voice::play(voice::CHATTER); }   // todavía sin cerebro: contesta en "ardilla"
     else if (conv == TALK && el > 400 && !voice::busy) { conv = HAPPY; convStart = ms; }
-    else if (conv == HAPPY && el > 1300) { inConv = false; ch.nextThink = t + 4; }
+    else if (conv == HAPPY && el > 2500) { inConv = false; ch.nextThink = t + 4; answer = ""; }
   }
   bool traveling = false;
   if (!inConv) {
@@ -450,13 +480,8 @@ void loop() {
     for (int x = 0; x < 80; x++) { uint16_t c = fb[y * 80 + x]; row[x * 3] = c; row[x * 3 + 1] = c; row[x * 3 + 2] = c; }
     memcpy(row + 240, row, 480); memcpy(row + 480, row, 480);
   }
-  if (portalActive) {
-    canvas->fillRoundRect(12, 176, 216, 52, 10, RGB565_WHITE);
-    canvas->drawRoundRect(12, 176, 216, 52, 10, C(0x2e2430));
-    canvas->setTextColor(C(0x2e2430)); canvas->setTextSize(2);
-    canvas->setCursor(24, 186); canvas->print("Falta el WiFi:");
-    canvas->setCursor(24, 206); canvas->print("cargalo en Chrome");
-  }
+  if (inConv && (conv == TALK || conv == HAPPY) && answer.length()) drawBubble(answer);
+  else if (portalActive) drawBubble("Falta el WiFi: cargalo en Chrome");
   canvas->flush();
 
   int32_t wait = 33 - (int32_t)(millis() - ms);
