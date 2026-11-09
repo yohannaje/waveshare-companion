@@ -31,7 +31,8 @@
 
 namespace voice {
 
-enum Cmd : uint8_t { CHATTER, LISTEN_ON, LISTEN_OFF, SPEAK };
+enum Cmd : uint8_t { CHATTER, LISTEN_ON, LISTEN_OFF, SPEAK, ALARM };
+static volatile float alarmVol = 0.2f;   // sube de a poco mientras suena la alarma
 static I2SClass i2s;
 static QueueHandle_t q;
 static volatile bool busy = false;
@@ -97,6 +98,14 @@ static void task(void *) {
           buf[2 * k] = buf[2 * k + 1] = (int16_t)constrain(v, -32767, 32767);
         }
         i2s.write((uint8_t *)buf, m * 4);
+      }
+    } else if (c == ALARM) {
+      // musiquita de despertar (original): dos frases alegres que suben, tipo cajita de musica
+      const float N[] = {523, 659, 784, 1047, 784, 659, 784, 1047,   784, 880, 1047, 1319, 1047, 880, 1047, 1568};
+      const int   D[] = {170, 170, 170, 330,  170, 170, 170, 330,    170, 170, 170, 330,  170, 170, 170, 450};
+      for (int i = 0; i < 16; i++) {
+        writeTone(N[i], N[i], D[i], alarmVol, 0.05f);
+        silence(i == 7 ? 260 : 45);
       }
     } else if (c == LISTEN_ON) {
       writeTone(880, 880, 60, 0.28f, 0); silence(20); writeTone(1320, 1320, 80, 0.28f, 0);

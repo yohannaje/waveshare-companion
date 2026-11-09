@@ -675,7 +675,12 @@ void loop() {
     lastActivity = ms;
     if (ms - ringStart > 90000) ringing = false;
     else {
-      if (ms - lastChirp > 2200 && !voice::busy) { lastChirp = ms; voice::play(voice::CHATTER); }
+      if (ms - lastChirp > 5500 && !voice::busy) {
+        lastChirp = ms;
+        float u = (ms - ringStart) / 40000.0f; if (u > 1) u = 1;
+        voice::alarmVol = 0.18f + 0.5f * u;   // arranca suave y sube hasta ~40 s
+        voice::play(voice::ALARM);
+      }
       char b[40]; snprintf(b, sizeof(b), "Despertate! Son las %02d:%02d", alH, alM); bubbleMsg = b; bubbleUntil = ms + 200;
     }
   }
