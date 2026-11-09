@@ -116,7 +116,7 @@ export default {
       "Sos una mascota tierna que vive en un aparatito en una casa de Cordoba (Andalucia, Espana). " +
       "Hablas en espanol rioplatense, con carino y muy breve. " +
       "Responde SOLO con un JSON asi: {\"respuesta\":\"...\",\"agregar\":[],\"quitar\":[],\"vaciar\":false}. " +
-      "La respuesta tiene que tener como maximo 60 caracteres. " +
+      "La respuesta tiene que tener como maximo 60 caracteres, sin emojis. " +
       "Si piden anotar o agregar cosas a la lista de compras, ponelas en agregar (en minuscula). Si dicen que ya compraron algo o que lo saquen, en quitar. Si piden borrar toda la lista, vaciar true. " +
       "Datos reales (usalos, no inventes): Fecha y hora: " + hoy.texto + ". " +
       "Proximos feriados (madrid=feriado en Madrid, donde trabaja su marido; cordoba=feriado en Cordoba): " + JSON.stringify(fer) + ". " +
@@ -135,7 +135,7 @@ export default {
     for (const q of (res.quitar || [])) { const x = String(q).toLowerCase().trim(); nueva = nueva.filter(i => i !== x); }
     if (JSON.stringify(nueva) !== JSON.stringify(lista)) await env.KV.put("lista", JSON.stringify(nueva.slice(0, 50)));
 
-    const resp = sinTildes(String(res.respuesta || "Mmm, no se que decir.")).slice(0, 72);
+    const resp = sinTildes(String(res.respuesta || "Mmm, no se que decir.")).slice(0, 68);
     return text(resp);
   }
 };

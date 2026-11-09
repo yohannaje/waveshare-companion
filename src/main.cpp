@@ -305,9 +305,9 @@ static bool portalActive = false, timeStarted = false;
 static String answer = "";
 static const char *ROOM_NAMES[4] = {"el bano", "la cocina", "el living", "el patio"};
 
-// Cartel de texto abajo (mismo estilo que el del WiFi). Corta en palabras, hasta 3 renglones de 17 letras.
+// Cartel de texto arriba (mismo estilo que el del WiFi). Corta en palabras, hasta 4 renglones de 17 letras.
 static void drawBubble(const String &txt) {
-  const int maxc = 17, maxLines = 3;
+  const int maxc = 17, maxLines = 4;
   String lines[maxLines]; int n = 0; String cur = "";
   int i = 0;
   while (i <= (int)txt.length() && n < maxLines) {
@@ -346,8 +346,8 @@ static float nowHour() {
   return lt.tm_hour + lt.tm_min / 60.0f;
 }
 
-static void startListen() { if (inConv && conv == LISTEN) return; holding = true; inConv = true; conv = LISTEN; convStart = millis(); voice::play(voice::LISTEN_ON); }
-static void stopListen() { if (!holding) return; holding = false; conv = THINK; convStart = millis(); voice::play(voice::LISTEN_OFF); }
+static void startListen() { if ((inConv && conv == LISTEN) || voice::asking) return; holding = true; inConv = true; conv = LISTEN; convStart = millis(); answer = ""; voice::play(voice::LISTEN_ON); voice::startRecording(); }
+static void stopListen() { if (!holding) return; holding = false; voice::stopRecording(); conv = THINK; convStart = millis(); voice::play(voice::LISTEN_OFF); voice::ask(); }
 
 // ---------- botones ----------
 struct Btn { int pin; bool down; uint32_t since; bool longFired; };
@@ -432,9 +432,11 @@ void loop() {
   if (inConv) {
     uint32_t el = ms - convStart;
     ch.state = conv;
-    if (conv == THINK && el > 1200) { conv = TALK; convStart = ms; answer = localAnswer(h, idx); voice::play(voice::CHATTER); }   // todavía sin cerebro: contesta en "ardilla"
+    if (conv == LISTEN && holding && !voice::recording && el > 1000) stopListen();   // llegó al máximo de grabación
+    if (conv == THINK && voice::answerReady && el > 600) { voice::answerReady = false; conv = TALK; convStart = ms; answer = voice::answerText; voice::play(voice::CHATTER); }
+    else if (conv == THINK && el > 35000) { conv = TALK; convStart = ms; answer = "Me quede pensando... proba de nuevo"; voice::play(voice::CHATTER); }
     else if (conv == TALK && el > 400 && !voice::busy) { conv = HAPPY; convStart = ms; }
-    else if (conv == HAPPY && el > 2500) { inConv = false; ch.nextThink = t + 4; answer = ""; }
+    else if (conv == HAPPY && el > 4000) { inConv = false; ch.nextThink = t + 4; answer = ""; }
   }
   bool traveling = false;
   if (!inConv) {
