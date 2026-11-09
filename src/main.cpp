@@ -533,14 +533,19 @@ static void sensorsInit() {
   Wire.beginTransmission(TOUCH_ADDR);
   if (Wire.endTransmission() == 0) { hasTouch = true; i2cWrite(TOUCH_ADDR, 0xFE, 0x01); }                       // sin auto-sleep del touch
   Serial.printf("imu=0x%02X touch=%d\n", imuAddr, hasTouch);
-  // diagnostico en pantalla: que dispositivos I2C aparecen (para ajustar sensor/touch)
+  // diagnostico en pantalla ~6 s: el touch puede estar "dormido" hasta que lo tocan, asi que se prueba seguido
   String found = "";
   for (uint8_t ad = 0x08; ad < 0x78; ad++) { Wire.beginTransmission(ad); if (Wire.endTransmission() == 0) { char h[6]; snprintf(h, sizeof(h), "%02X ", ad); found += h; } }
-  canvas->fillScreen(RGB565_WHITE); canvas->setTextColor(C(0x2e2430)); canvas->setTextSize(2);
-  canvas->setCursor(10, 60); canvas->print(imuAddr ? "mov: ok" : "mov: NO");
-  canvas->setCursor(10, 84); canvas->print(hasTouch ? "touch: ok" : "touch: NO");
-  canvas->setCursor(10, 120); canvas->print("I2C:"); canvas->setCursor(10, 144); canvas->print(found);
-  canvas->flush(); delay(3500);
+  uint32_t t0 = millis();
+  while (millis() - t0 < 6000) {
+    if (!hasTouch) { Wire.beginTransmission(TOUCH_ADDR); if (Wire.endTransmission() == 0) { hasTouch = true; i2cWrite(TOUCH_ADDR, 0xFE, 0x01); } }
+    canvas->fillScreen(RGB565_WHITE); canvas->setTextColor(C(0x2e2430)); canvas->setTextSize(2);
+    canvas->setCursor(10, 40); canvas->print(imuAddr ? "mov: ok" : "mov: NO");
+    canvas->setCursor(10, 64); canvas->print(hasTouch ? "touch: ok" : "touch: toca la");
+    if (!hasTouch) { canvas->setCursor(10, 84); canvas->print("pantalla!"); }
+    canvas->setCursor(10, 124); canvas->print("I2C:"); canvas->setCursor(10, 148); canvas->print(found);
+    canvas->flush(); delay(120);
+  }
 }
 // sacudida: 3 golpes fuertes en menos de 1 s
 static bool shaken(uint32_t ms) {
@@ -558,7 +563,11 @@ static bool shaken(uint32_t ms) {
 // 0 nada, 1 swipe a la izquierda, 2 swipe a la derecha, 3 toque
 static int touchPoll(uint32_t ms) {
   static bool down = false; static int x0, y0, x1, y1; static uint32_t since = 0, last = 0;
-  if (!hasTouch || ms - last < 30) return 0; last = ms;
+  if (ms - last < (hasTouch ? 30 : 100)) return 0; last = ms;
+  if (!hasTouch) {   // el chip puede dormir hasta que lo tocan: probar seguido, y al despertar desactivar su auto-sleep
+    Wire.beginTransmission(TOUCH_ADDR); if (Wire.endTransmission() != 0) return 0;
+    hasTouch = true; i2cWrite(TOUCH_ADDR, 0xFE, 0x01);
+  }
   uint8_t b[6]; if (!i2cRead(TOUCH_ADDR, 0x01, b, 6)) return 0;
   int fingers = b[1] & 0x0F, x = ((b[2] & 0x0F) << 8) | b[3], y = ((b[4] & 0x0F) << 8) | b[5];
   if (fingers > 0) { if (!down) { down = true; x0 = x; y0 = y; since = ms; } x1 = x; y1 = y; return 0; }
