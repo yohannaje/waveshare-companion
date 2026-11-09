@@ -11,12 +11,17 @@
 #include <math.h>
 #include "voice.h"
 #include <ImprovWiFiLibrary.h>
+#include <esp_sleep.h>
+#include <esp_wifi.h>
+#include <driver/gpio.h>
+#include <driver/rtc_io.h>
 
 // ---------- pines (de los ejemplos oficiales de Waveshare) ----------
 #define PIN_BL       46
 #define PIN_PWR_HOLD 2   // mantiene la placa prendida con batería
 #define BTN_BOOT     0   // clic: cambiar colores
-#define BTN_PWR      5   // mantener 2 s: apagar
+#define BTN_PWR      5   // clic: dormir / despertar; mantener 2 s: apagar
+#define IDLE_SLEEP_MS 300000UL   // se duerme solo tras 5 minutos sin usarlo
 #define BTN_PLUS     4   // mantener: escuchar
 
 Arduino_DataBus *bus = new Arduino_ESP32SPI(45 /*DC*/, 21 /*CS*/, 38 /*SCK*/, 39 /*MOSI*/, -1);
@@ -374,27 +379,57 @@ static void powerOff() {
   digitalWrite(PIN_PWR_HOLD, LOW);
   delay(2000);  // si está enchufada por USB sigue prendida
 }
+
+static uint32_t lastActivity = 0;
+// Dormir: sueño profundo (casi no gasta batería). Se despierta con el botón PWR o el botón + (al despertar arranca de cero, ~5 s).
+static void goToSleep() {
+  voice::stopRecording();
+  digitalWrite(PIN_PA, LOW);
+  canvas->fillScreen(RGB565_WHITE);
+  canvas->setTextColor(C(0x2e2430)); canvas->setTextSize(3); canvas->setCursor(84, 108); canvas->print("Zzz");
+  canvas->flush(); delay(700);
+  analogWrite(PIN_BL, 0);
+  panel->displayOff();
+  WiFi.disconnect(true); WiFi.mode(WIFI_OFF);
+  // esperar a que suelten el botón para no despertar enseguida
+  uint32_t t0 = millis();
+  while ((digitalRead(BTN_PWR) == LOW || digitalRead(BTN_PLUS) == LOW) && millis() - t0 < 3000) delay(10);
+  // mantener prendida la placa (batería) y la pantalla apagada durante el sueño
+  gpio_hold_en((gpio_num_t)PIN_PWR_HOLD); gpio_hold_en((gpio_num_t)PIN_BL); gpio_deep_sleep_hold_en();
+  rtc_gpio_pullup_en((gpio_num_t)BTN_PWR); rtc_gpio_pulldown_dis((gpio_num_t)BTN_PWR);
+  rtc_gpio_pullup_en((gpio_num_t)BTN_PLUS); rtc_gpio_pulldown_dis((gpio_num_t)BTN_PLUS);
+  esp_sleep_enable_ext1_wakeup_io((1ULL << BTN_PWR) | (1ULL << BTN_PLUS), ESP_EXT1_WAKEUP_ANY_LOW);
+  esp_deep_sleep_start();
+}
 static void pollButtons() {
   uint32_t ms = millis();
   // PLUS: mantener para hablar
   bool d = digitalRead(bPlus.pin) == LOW;
-  if (d && !bPlus.down) { bPlus.down = true; bPlus.since = ms; startListen(); }
+  if (d && !bPlus.down) { bPlus.down = true; bPlus.since = ms; lastActivity = ms; startListen(); }
   else if (!d && bPlus.down && ms - bPlus.since > 30) { bPlus.down = false; stopListen(); }
   // BOOT: clic = cambiar colores
   d = digitalRead(bBoot.pin) == LOW;
   if (d && !bBoot.down) { bBoot.down = true; bBoot.since = ms; }
-  else if (!d && bBoot.down) { bBoot.down = false; if (ms - bBoot.since > 30) { palIdx = (palIdx + 1) % 3; PAL = &PALS[palIdx]; prefs.putUChar("pal", palIdx); } }
-  // PWR: mantener 2 s = apagar
+  else if (!d && bBoot.down) { bBoot.down = false; lastActivity = ms; if (!bBoot.longFired && ms - bBoot.since > 30) { palIdx = (palIdx + 1) % 3; PAL = &PALS[palIdx]; prefs.putUChar("pal", palIdx); } }
+  // PWR: clic corto = dormir, mantener 2 s = apagar
   d = digitalRead(bPwr.pin) == LOW;
-  if (d && !bPwr.down) { bPwr.down = true; bPwr.since = ms; bPwr.longFired = false; }
+  if (d && !bPwr.down) { bPwr.down = true; bPwr.since = ms; bPwr.longFired = false; lastActivity = ms; }
   else if (d && bPwr.down && !bPwr.longFired && ms - bPwr.since > 2000) { bPwr.longFired = true; powerOff(); }
-  else if (!d) bPwr.down = false;
+  else if (!d && bPwr.down) { bPwr.down = false; if (!bPwr.longFired && ms - bPwr.since > 30) goToSleep(); }
 }
 
 // ---------- setup / loop ----------
 void setup() {
+  // si despierta de dormir: soltar lo que se mantuvo retenido durante el sueño
+  gpio_deep_sleep_hold_dis(); gpio_hold_dis((gpio_num_t)PIN_PWR_HOLD); gpio_hold_dis((gpio_num_t)PIN_BL);
+  rtc_gpio_deinit((gpio_num_t)BTN_PWR); rtc_gpio_deinit((gpio_num_t)BTN_PLUS);
   pinMode(PIN_PWR_HOLD, OUTPUT); digitalWrite(PIN_PWR_HOLD, HIGH);
   pinMode(BTN_PLUS, INPUT_PULLUP); pinMode(BTN_BOOT, INPUT_PULLUP); pinMode(BTN_PWR, INPUT_PULLUP);
+  // el botón que lo despertó sigue apretado: que soltarlo no cuente como clic
+  if (digitalRead(BTN_PWR) == LOW)  { bPwr.down = true; bPwr.since = millis(); bPwr.longFired = true; }
+  if (digitalRead(BTN_PLUS) == LOW) { bPlus.down = true; bPlus.since = millis(); }
+  if (digitalRead(BTN_BOOT) == LOW) { bBoot.down = true; bBoot.since = millis(); bBoot.longFired = true; }
+  lastActivity = millis();
   Serial.begin(115200);
 
   PALS[0] = {C(0xffffff), C(0xe6ebf5), C(0xa9c8ea), C(0xd6e6f8), C(0xf6efd9), C(0xf7e08a), C(0xb9d3f0)};
@@ -435,6 +470,8 @@ void loop() {
     configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.google.com"); timeStarted = true;
   }
   pollButtons();
+  if (!inConv && !voice::asking && !voice::busy && millis() - lastActivity > IDLE_SLEEP_MS) goToSleep();
+  if (inConv) lastActivity = millis();
 
   uint32_t ms = millis();
   float dt = (ms - lastMs) / 1000.0f; if (dt > 0.05f) dt = 0.05f; lastMs = ms;
