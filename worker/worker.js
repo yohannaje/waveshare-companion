@@ -33,6 +33,62 @@ function intencionMusica(oido) {
   return null;
 }
 
+// ---- Spotify (API oficial, cuenta Premium de ella). Login una sola vez con PKCE: no hay claves secretas. ----
+const SP_SCOPES = "user-modify-playback-state user-read-playback-state";
+const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const rnd = (n) => b64url(crypto.getRandomValues(new Uint8Array(n)));
+async function spLogin(env, url) {
+  const clave = url.searchParams.get("k") || "";
+  const esperada = await env.KV.get("sp_setup");
+  const cid = await env.KV.get("sp_client");
+  if (!esperada || clave !== esperada || !cid) return text("No", 403);
+  const verifier = rnd(48), state = rnd(16);
+  const challenge = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+  await env.KV.put("sp_v:" + state, verifier, { expirationTtl: 600 });
+  const q = new URLSearchParams({ response_type: "code", client_id: cid, scope: SP_SCOPES, redirect_uri: url.origin + "/spotify/callback", state, code_challenge_method: "S256", code_challenge: challenge });
+  return Response.redirect("https://accounts.spotify.com/authorize?" + q, 302);
+}
+async function spCallback(env, url) {
+  const state = url.searchParams.get("state") || "", code = url.searchParams.get("code") || "";
+  const verifier = await env.KV.get("sp_v:" + state);
+  const cid = await env.KV.get("sp_client");
+  if (!verifier || !code || !cid) return text("Link vencido. Pedile a Claude uno nuevo.", 400);
+  const r = await fetch("https://accounts.spotify.com/api/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: url.origin + "/spotify/callback", client_id: cid, code_verifier: verifier }) });
+  const j = await r.json().catch(() => ({}));
+  if (!j.refresh_token) return text("Spotify no dio permiso: " + (j.error_description || j.error || r.status), 400);
+  await env.KV.put("sp_refresh", j.refresh_token);
+  await env.KV.put("sp_login", new Date().toISOString().slice(0, 10));
+  return new Response("<meta charset=utf-8><body style='font-family:sans-serif;text-align:center;margin-top:20vh'><h1>Listo!</h1><p>Chipi ya puede manejar tu Spotify. Podes cerrar esta ventana.</p>", { headers: { "Content-Type": "text/html; charset=utf-8" } });
+}
+async function spToken(env) {
+  const refresh = await env.KV.get("sp_refresh"), cid = await env.KV.get("sp_client");
+  if (!refresh || !cid) return null;
+  const r = await fetch("https://accounts.spotify.com/api/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refresh, client_id: cid }) });
+  const j = await r.json().catch(() => ({}));
+  if (!j.access_token) return null;
+  if (j.refresh_token && j.refresh_token !== refresh) await env.KV.put("sp_refresh", j.refresh_token);
+  return j.access_token;
+}
+// accion: play | pause | next. Devuelve "ok", "sinapp" (no hay Spotify abierto), "sinlogin" o "error:<codigo>"
+async function spotify(env, accion, uri) {
+  const tk = await spToken(env);
+  if (!tk) return "sinlogin";
+  const H = { Authorization: "Bearer " + tk };
+  const dr = await fetch("https://api.spotify.com/v1/me/player/devices", { headers: H });
+  if (!dr.ok) return "error:" + dr.status;
+  const devs = (await dr.json()).devices || [];
+  if (!devs.length) return "sinapp";
+  const dev = devs.find(d => d.is_active) || devs.find(d => d.type === "Computer") || devs[0];
+  const q = "?device_id=" + encodeURIComponent(dev.id);
+  let r;
+  if (accion === "play") r = await fetch("https://api.spotify.com/v1/me/player/play" + q, { method: "PUT", headers: { ...H, "Content-Type": "application/json" }, body: JSON.stringify({ context_uri: uri }) });
+  else if (accion === "pause") r = await fetch("https://api.spotify.com/v1/me/player/pause" + q, { method: "PUT", headers: H });
+  else r = await fetch("https://api.spotify.com/v1/me/player/next" + q, { method: "POST", headers: H });
+  return r.ok || r.status === 204 ? "ok" : "error:" + r.status;
+}
+
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" };
 function text(s, status) { return new Response(s, { status: status || 200, headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS } }); }
 function conVoz(pantalla, hablado) {
@@ -110,10 +166,8 @@ export default {
     const url = new URL(req.url);
     if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
     if (url.pathname === "/lista") return json({ lista: JSON.parse((await env.KV.get("lista")) || "[]") });
-    if (url.pathname === "/mac") {
-      const m = JSON.parse((await env.KV.get("musica")) || '{"n":0,"accion":"none","uri":"-"}');
-      return text(m.n + "|" + m.accion + "|" + m.uri);
-    }
+    if (url.pathname === "/spotify/login") return spLogin(env, url);
+    if (url.pathname === "/spotify/callback") return spCallback(env, url);
     if (url.pathname === "/voz" && req.method === "POST") {
       const dev = req.headers.get("X-Device") || "";
       if (!dev || dev !== (await env.KV.get("aparato"))) return text("No te conozco", 403);
@@ -163,12 +217,15 @@ export default {
 
     const mus = intencionMusica(oido);
     if (mus) {
-      const prev = JSON.parse((await env.KV.get("musica")) || '{"n":0}');
-      const uri = mus.lista ? mus.lista.uri : "-";
-      await env.KV.put("musica", JSON.stringify({ n: (prev.n || 0) + 1, accion: mus.accion, uri }));
-      if (mus.accion === "play") return conVoz("Dale! Pongo " + mus.lista.nombre, "¡Dale! Pongo " + mus.lista.nombre);
-      if (mus.accion === "pause") return conVoz("Listo, silencio!", "¡Listo, silencio!");
-      return conVoz("Va la siguiente!", "¡Va la siguiente!");
+      const res = await spotify(env, mus.accion, mus.lista ? mus.lista.uri : "").catch(() => "error:red");
+      if (res === "ok") {
+        if (mus.accion === "play") return conVoz("Dale! Pongo " + mus.lista.nombre, "¡Dale! Pongo " + mus.lista.nombre);
+        if (mus.accion === "pause") return conVoz("Listo, silencio!", "¡Listo, silencio!");
+        return conVoz("Va la siguiente!", "¡Va la siguiente!");
+      }
+      if (res === "sinapp") return conVoz("Abri Spotify en la compu o el cel y probamos", "Abrí Spotify en la compu o en el celu y probamos de nuevo");
+      if (res === "sinlogin") return conVoz("Falta conectar Spotify. Pedile a Claude", "Falta conectar Spotify. Pedíselo a Claude");
+      return conVoz("Spotify no me deja: " + res.slice(0, 30), "Spotify no me dejó. Probemos de nuevo");
     }
 
     const [fer, cli] = await Promise.all([feriados(hoy), clima()]);
