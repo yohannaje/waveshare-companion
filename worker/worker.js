@@ -83,10 +83,6 @@ export default {
     const url = new URL(req.url);
     if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
     if (url.pathname === "/lista") return json({ lista: JSON.parse((await env.KV.get("lista")) || "[]") });
-    if (url.pathname === "/probar") {
-      try { const r = await env.AI.run(LLM, { messages: [{ role: "user", content: "Responde solo: hola" }], max_tokens: 20 }); return text("OK " + JSON.stringify(r).slice(0, 300)); }
-      catch (e) { return text("ERR " + String(e && e.message || e).slice(0, 400)); }
-    }
     if (url.pathname !== "/ask" || req.method !== "POST") return text("Companero listo");
 
     // Solo responde al primer aparato que se conectó (tu Waveshare).
@@ -130,8 +126,9 @@ export default {
     let res = { respuesta: "" };
     try {
       const r = await env.AI.run(LLM, { messages: [{ role: "system", content: sistema }, { role: "user", content: oido }], max_tokens: 160, temperature: 0.4 });
-      res = parseJson(r.response || "");
-    } catch (e) { return text("Uy, me maree pensando. Proba de nuevo."); }
+      const raw = typeof r.response === "string" ? r.response : (r.choices && r.choices[0] && r.choices[0].message && r.choices[0].message.content) || "";
+      res = parseJson(raw);
+    } catch (e) { return text("Me maree pensando: " + sinTildes(String(e && e.message || e)).slice(0, 40)); }
 
     let nueva = lista.slice();
     if (res.vaciar === true) nueva = [];
