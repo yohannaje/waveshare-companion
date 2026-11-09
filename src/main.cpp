@@ -428,8 +428,6 @@ static float nowHour() {
 static void startListen() { if ((inConv && conv == LISTEN) || voice::asking) return; holding = true; inConv = true; conv = LISTEN; convStart = millis(); answer = ""; voice::play(voice::LISTEN_ON); voice::startRecording(); }
 static void stopListen() { if (!holding) return; holding = false; voice::stopRecording(); conv = THINK; convStart = millis(); voice::play(voice::LISTEN_OFF); voice::ask(); }
 
-static void startHello() { if (inConv || voice::asking || alarmMode) return; inConv = true; conv = THINK; convStart = millis(); answer = ""; voice::sayHello(); }
-
 // ---------- botones ----------
 struct Btn { int pin; bool down; uint32_t since; bool longFired; };
 static Btn bPlus = {BTN_PLUS, false, 0, false}, bBoot = {BTN_BOOT, false, 0, false}, bPwr = {BTN_PWR, false, 0, false};
@@ -449,6 +447,7 @@ static uint32_t ringStart = 0, lastChirp = 0, dizzyUntil = 0, tapUntil = 0, bubb
 static String bubbleMsg;
 static int roomOverride = -1; static uint32_t roomUntil = 0;
 static uint32_t lastActivity = 0;
+static void startHello() { if (inConv || voice::asking || alarmMode) return; inConv = true; conv = THINK; convStart = millis(); answer = ""; voice::sayHello(); }
 // Dormir: sueño profundo (casi no gasta batería). Se despierta con el botón PWR o el botón + (al despertar arranca de cero, ~5 s).
 static void goToSleep() {
   voice::stopRecording();
