@@ -13,6 +13,26 @@ const LLM = "@cf/meta/llama-3.1-8b-instruct-fast";
 const TTS = "@cf/deepgram/aura-2-es";   // 2727 neuronas cada 1000 letras
 const VOCES = ["selena"];   // Cloudflare no ofrece las voces argentinas (antonia/hector): rechaza el nombre. selena = mujer latinoamericana neutra
 
+
+// Musica: el Worker deja el pedido en KV y un programita en la Mac de ella lo lee (ver mac/).
+const LISTAS_MUSICA = [
+  { nombre: "Discover Weekly", uri: "spotify:playlist:37i9dQZEVXcTVHkWbn5OYt", claves: /discover|descubr/ },
+  { nombre: "Daily Mix 1",     uri: "spotify:playlist:37i9dQZF1E39uxJkD63HZo", claves: /daily|mix/ },
+  { nombre: "Alone House Pop", uri: "spotify:playlist:282Q6K7zkJtQT0reRtdQGw", claves: /alone|house|pop/ },
+];
+function intencionMusica(oido) {
+  const t = sinTildes(String(oido)).toLowerCase();
+  const habla = /musica|cancion|tema|playlist|lista de reproduc|discover|descubr|daily|mix|alone|house|pop|algo para escuchar/.test(t);
+  if (/(paus|silenci|basta)/.test(t) || (/\b(para|parar|apaga|apagar|saca|sacar)\b/.test(t) && /musica|cancion/.test(t))) return { accion: "pause" };
+  if (/(siguiente|proxima|otra cancion|otro tema|cambia.*(cancion|tema)|saltea|salta)/.test(t)) return { accion: "next" };
+  if (habla && /(pone|poneme|pon\b|reproduc|escuchar|play|quiero|dale|ponga)/.test(t)) {
+    const hit = LISTAS_MUSICA.find(l => l.claves.test(t));
+    const l = hit || LISTAS_MUSICA[Math.floor(Math.random() * LISTAS_MUSICA.length)];
+    return { accion: "play", lista: l };
+  }
+  return null;
+}
+
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" };
 function text(s, status) { return new Response(s, { status: status || 200, headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS } }); }
 function conVoz(pantalla, hablado) {
@@ -90,6 +110,10 @@ export default {
     const url = new URL(req.url);
     if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
     if (url.pathname === "/lista") return json({ lista: JSON.parse((await env.KV.get("lista")) || "[]") });
+    if (url.pathname === "/mac") {
+      const m = JSON.parse((await env.KV.get("musica")) || '{"n":0,"accion":"none","uri":"-"}');
+      return text(m.n + "|" + m.accion + "|" + m.uri);
+    }
     if (url.pathname === "/voz" && req.method === "POST") {
       const dev = req.headers.get("X-Device") || "";
       if (!dev || dev !== (await env.KV.get("aparato"))) return text("No te conozco", 403);
@@ -136,6 +160,16 @@ export default {
       oido = (r.text || "").trim();
     } catch (e) { return text("Uy, no pude escuchar. Proba de nuevo."); }
     if (!oido) return text("No te escuche bien. Proba de nuevo.");
+
+    const mus = intencionMusica(oido);
+    if (mus) {
+      const prev = JSON.parse((await env.KV.get("musica")) || '{"n":0}');
+      const uri = mus.lista ? mus.lista.uri : "-";
+      await env.KV.put("musica", JSON.stringify({ n: (prev.n || 0) + 1, accion: mus.accion, uri }));
+      if (mus.accion === "play") return conVoz("Dale! Pongo " + mus.lista.nombre, "¡Dale! Pongo " + mus.lista.nombre);
+      if (mus.accion === "pause") return conVoz("Listo, silencio!", "¡Listo, silencio!");
+      return conVoz("Va la siguiente!", "¡Va la siguiente!");
+    }
 
     const [fer, cli] = await Promise.all([feriados(hoy), clima()]);
     const lista = JSON.parse((await env.KV.get("lista")) || "[]");
