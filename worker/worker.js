@@ -145,6 +145,24 @@ async function clima() {
   return "ahora " + Math.round(d.current.temperature_2m) + " grados. " + partes.join(" | ");
 }
 
+
+// Clima actual en clases simples: 0 sol, 1 algo nublado, 2 nublado, 3 lluvia, 4 tormenta, 5 niebla, 6 nieve
+async function climaAhora() {
+  const u = "https://api.open-meteo.com/v1/forecast?latitude=" + CORDOBA.lat + "&longitude=" + CORDOBA.lon +
+    "&current=weather_code,temperature_2m&timezone=Europe%2FMadrid";
+  const d = await cached(u, 600).catch(() => null);
+  if (!d || !d.current) return null;
+  const c = d.current.weather_code;
+  let cls = 2;
+  if (c === 0) cls = 0; else if (c <= 2) cls = 1; else if (c === 3) cls = 2;
+  else if (c === 45 || c === 48) cls = 5;
+  else if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82)) cls = 3;
+  else if ((c >= 71 && c <= 77) || c === 85 || c === 86) cls = 6;
+  else if (c >= 95) cls = 4;
+  return { cls, temp: Math.round(d.current.temperature_2m) };
+}
+function horaMadrid() { return parseInt(new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/Madrid", hour: "2-digit", hour12: false }).format(new Date())) % 24; }
+
 function wav(pcm) {
   const h = new ArrayBuffer(44), v = new DataView(h);
   const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
@@ -165,6 +183,33 @@ export default {
   async fetch(req, env) {
     const url = new URL(req.url);
     if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
+    if (url.pathname === "/clima") {
+      const c = await climaAhora();
+      return text(c ? c.cls + "," + c.temp : "2,0");
+    }
+    if (url.pathname === "/hola") {
+      // Chipi dice algo sin que le pregunten (sin IA: lo arma el codigo con hora, clima y lista de compras)
+      const dev = req.headers.get("X-Device") || "";
+      if (!dev || dev !== (await env.KV.get("aparato"))) return text("No te conozco", 403);
+      const c = await climaAhora();
+      const h = horaMadrid();
+      const lista = JSON.parse((await env.KV.get("lista")) || "[]");
+      const op = [];
+      const saludo = h < 6 ? "Todavia es de noche, a dormir!" : h < 13 ? "Buen dia!" : h < 20 ? "Buenas tardes!" : "Buenas noches!";
+      op.push(saludo + " Que lindo verte");
+      if (c) {
+        if (c.cls === 3 || c.cls === 4) op.push("Esta lloviendo afuera, ojo con el paraguas");
+        else if (c.cls === 0) op.push("Hay solcito, " + c.temp + " grados");
+        else if (c.cls === 6) op.push("Esta nevando! No lo puedo creer");
+        else op.push("Afuera hay " + c.temp + " grados");
+        if (c.temp <= 8) op.push("Hace frio, " + c.temp + " grados. Abrigate!");
+        if (c.temp >= 32) op.push("Que calor, " + c.temp + " grados. Tomate un agua!");
+      }
+      if (lista.length) op.push("Te falta comprar " + lista.slice(0, 3).join(", ") + (lista.length > 3 ? " y " + (lista.length - 3) + " mas" : ""));
+      op.push("Hoy estoy re contenta", "Me gusta estar con vos", "Cuando quieras charlamos, mantene el boton de mas");
+      const t = op[Math.floor(Math.random() * op.length)];
+      return conVoz(sinTildes(t).slice(0, 68), t);
+    }
     if (url.pathname === "/lista") return json({ lista: JSON.parse((await env.KV.get("lista")) || "[]") });
     if (url.pathname === "/spotify/login") return spLogin(env, url);
     if (url.pathname === "/spotify/callback") return spCallback(env, url);

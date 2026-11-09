@@ -23,6 +23,7 @@
 #define SR 16000
 #define ES7210_ADDR 0x40
 #define BRAIN_URL "https://companero.vc5z8pn7nd.workers.dev/ask"
+#define HOLA_URL  "https://companero.vc5z8pn7nd.workers.dev/hola"
 #define VOZ_URL   "https://companero.vc5z8pn7nd.workers.dev/voz"
 #define VOICE_SPEED 1.30f   // >1 = voz mas aguda y rapida, tipo ardilla (1.0 = normal)
 #define SPK_MAX_SEC 8
@@ -158,7 +159,7 @@ static void stopRecording() {
 
 // ---- envío al cerebro ----
 static String deviceId() { uint64_t m = ESP.getEfuseMac(); char b[20]; snprintf(b, sizeof(b), "%04X%08X", (uint16_t)(m >> 32), (uint32_t)m); return String(b); }
-static volatile bool asking = false, answerReady = false;
+static volatile bool asking = false, answerReady = false, proactive = false;
 static String answerText;
 class PcmSink : public Stream {
  public:
@@ -176,7 +177,22 @@ class PcmSink : public Stream {
 static void askTask(void *) {
   String out, hablado;
   spkLen = 0;
-  if (WiFi.status() != WL_CONNECTED) out = "Me falta el WiFi para pensar.";
+  if (proactive && WiFi.status() == WL_CONNECTED) {
+    // Chipi dice algo sin que le pregunten (hora, clima, lista de compras)
+    WiFiClientSecure client; client.setInsecure();
+    HTTPClient http;
+    http.setTimeout(15000);
+    const char *keys[] = {"X-Voz"};
+    http.collectHeaders(keys, 1);
+    if (http.begin(client, HOLA_URL)) {
+      http.addHeader("X-Device", deviceId());
+      int code = http.GET();
+      if (code > 0) { out = http.getString(); if (code == 200) hablado = http.header("X-Voz"); else out = "Mmm... ahora no se que decir."; }
+      else out = "Uy, no llegue al cerebro.";
+      http.end();
+    } else out = "Uy, no llegue al cerebro.";
+  }
+  else if (WiFi.status() != WL_CONNECTED) out = "Me falta el WiFi para pensar.";
   else if (recLen < SR / 2) out = "No te escuche. Mantene el boton mientras hablas.";
   else {
     // ganancia simple para que la voz llegue clara
@@ -221,11 +237,17 @@ static void askTask(void *) {
   answerText = out;
   answerReady = true;
   asking = false;
+  proactive = false;
   vTaskDelete(NULL);
 }
 static void ask() {
   if (asking) return;
   asking = true; answerReady = false;
+  xTaskCreatePinnedToCore(askTask, "ask", 16384, NULL, 2, NULL, 0);
+}
+static void sayHello() {
+  if (asking) return;
+  proactive = true; asking = true; answerReady = false;
   xTaskCreatePinnedToCore(askTask, "ask", 16384, NULL, 2, NULL, 0);
 }
 
