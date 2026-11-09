@@ -23,16 +23,21 @@
 #define SR 16000
 #define ES7210_ADDR 0x40
 #define BRAIN_URL "https://companero.vc5z8pn7nd.workers.dev/ask"
+#define VOZ_URL   "https://companero.vc5z8pn7nd.workers.dev/voz"
+#define VOICE_SPEED 1.30f   // >1 = voz mas aguda y rapida, tipo ardilla (1.0 = normal)
+#define SPK_MAX_SEC 8
 #define MAX_REC_SEC 8
 
 namespace voice {
 
-enum Cmd : uint8_t { CHATTER, LISTEN_ON, LISTEN_OFF };
+enum Cmd : uint8_t { CHATTER, LISTEN_ON, LISTEN_OFF, SPEAK };
 static I2SClass i2s;
 static QueueHandle_t q;
 static volatile bool busy = false;
 static bool ok = false;
 static int16_t buf[512];  // estéreo: L,R
+static int16_t *spk = nullptr;           // voz hablada que llega del cerebro (mono 16 kHz, PSRAM)
+static volatile size_t spkLen = 0;
 
 // ---- reproducción ----
 static void writeTone(float f0, float f1, int ms, float amp, float squeak) {
@@ -77,6 +82,21 @@ static void task(void *) {
         if ((esp_random() % 5) == 0) silence(80);
       }
       writeTone(2300, 3300, 70, 0.3f, 0.1f);
+    } else if (c == SPEAK) {
+      // 2 gorjeos de ardilla y despues la frase en espanol, aguda y rapida
+      for (int k = 0; k < 2; k++) { float b = 1700 + esp_random() % 700; writeTone(b, b * 1.5f, 55, 0.3f, 0.15f); silence(25); }
+      silence(40);
+      size_t n = spkLen;
+      size_t outN = (size_t)((n - 1) / VOICE_SPEED);
+      for (size_t i = 0; i < outN; i += 256) {
+        int m = (int)min((size_t)256, outN - i);
+        for (int k = 0; k < m; k++) {
+          float x = (i + k) * VOICE_SPEED; size_t i0 = (size_t)x; float fr = x - i0;
+          int v = (int)(spk[i0] * (1 - fr) + spk[min(i0 + 1, n - 1)] * fr);
+          buf[2 * k] = buf[2 * k + 1] = (int16_t)constrain(v, -32767, 32767);
+        }
+        i2s.write((uint8_t *)buf, m * 4);
+      }
     } else if (c == LISTEN_ON) {
       writeTone(880, 880, 60, 0.28f, 0); silence(20); writeTone(1320, 1320, 80, 0.28f, 0);
     } else if (c == LISTEN_OFF) {
@@ -140,8 +160,22 @@ static void stopRecording() {
 static String deviceId() { uint64_t m = ESP.getEfuseMac(); char b[20]; snprintf(b, sizeof(b), "%04X%08X", (uint16_t)(m >> 32), (uint32_t)m); return String(b); }
 static volatile bool asking = false, answerReady = false;
 static String answerText;
+class PcmSink : public Stream {
+ public:
+  size_t n = 0;
+  size_t write(const uint8_t *d, size_t len) override {
+    size_t room = SR * SPK_MAX_SEC * 2 - n; size_t c = min(len, room);
+    if (spk && c) { memcpy((uint8_t *)spk + n, d, c); n += c; }
+    return len;
+  }
+  size_t write(uint8_t b) override { return write(&b, 1); }
+  int available() override { return 0; }
+  int read() override { return -1; }
+  int peek() override { return -1; }
+};
 static void askTask(void *) {
-  String out;
+  String out, hablado;
+  spkLen = 0;
   if (WiFi.status() != WL_CONNECTED) out = "Me falta el WiFi para pensar.";
   else if (recLen < SR / 2) out = "No te escuche. Mantene el boton mientras hablas.";
   else {
@@ -149,16 +183,38 @@ static void askTask(void *) {
     int peak = 1; for (size_t i = 0; i < recLen; i++) { int a = abs(rec[i]); if (a > peak) peak = a; }
     float g = min(8.0f, 24000.0f / peak);
     for (size_t i = 0; i < recLen; i++) rec[i] = (int16_t)constrain((int)(rec[i] * g), -32767, 32767);
-    WiFiClientSecure client; client.setInsecure();
-    HTTPClient http;
-    http.setTimeout(25000);
-    if (http.begin(client, BRAIN_URL)) {
-      http.addHeader("Content-Type", "application/octet-stream");
-      http.addHeader("X-Device", deviceId());
-      int code = http.POST((uint8_t *)rec, recLen * 2);
-      if (code > 0) out = http.getString(); else out = "Uy, no llegue al cerebro. Proba de nuevo.";
-      http.end();
-    } else out = "Uy, no llegue al cerebro.";
+    {
+      WiFiClientSecure client; client.setInsecure();
+      HTTPClient http;
+      http.setTimeout(25000);
+      const char *keys[] = {"X-Voz"};
+      http.collectHeaders(keys, 1);
+      if (http.begin(client, BRAIN_URL)) {
+        http.addHeader("Content-Type", "application/octet-stream");
+        http.addHeader("X-Device", deviceId());
+        int code = http.POST((uint8_t *)rec, recLen * 2);
+        if (code > 0) { out = http.getString(); if (code == 200) hablado = http.header("X-Voz"); }
+        else out = "Uy, no llegue al cerebro. Proba de nuevo.";
+        http.end();
+      } else out = "Uy, no llegue al cerebro.";
+    }
+    // voz hablada (si falla, queda solo el cartel + ardilla)
+    if (hablado.length() && spk) {
+      WiFiClientSecure client2; client2.setInsecure();
+      HTTPClient h2;
+      h2.setTimeout(20000);
+      if (h2.begin(client2, VOZ_URL)) {
+        h2.addHeader("Content-Type", "text/plain");
+        h2.addHeader("X-Device", deviceId());
+        int code = h2.POST(hablado);
+        if (code == 200) {
+          PcmSink sink;
+          h2.writeToStream(&sink);
+          if (sink.n > SR / 2) spkLen = sink.n / 2;
+        }
+        h2.end();
+      }
+    }
   }
   out.trim();
   if (out.length() == 0) out = "Mmm...";
@@ -170,7 +226,7 @@ static void askTask(void *) {
 static void ask() {
   if (asking) return;
   asking = true; answerReady = false;
-  xTaskCreatePinnedToCore(askTask, "ask", 12288, NULL, 2, NULL, 0);
+  xTaskCreatePinnedToCore(askTask, "ask", 16384, NULL, 2, NULL, 0);
 }
 
 static void begin() {
@@ -187,6 +243,7 @@ static void begin() {
   es8311_voice_volume_set(h, 70, NULL);
   es8311_microphone_config(h, false);
   rec = (int16_t *)ps_malloc(REC_MAX * sizeof(int16_t));
+  spk = (int16_t *)ps_malloc(SR * SPK_MAX_SEC * sizeof(int16_t));
   micPowerDown();  // el micrófono arranca apagado
   q = xQueueCreate(4, sizeof(Cmd));
   xTaskCreatePinnedToCore(task, "voice", 4096, NULL, 3, NULL, 0);

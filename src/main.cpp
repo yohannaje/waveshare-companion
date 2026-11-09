@@ -433,8 +433,8 @@ void loop() {
     uint32_t el = ms - convStart;
     ch.state = conv;
     if (conv == LISTEN && holding && !voice::recording && el > 1000) stopListen();   // llegó al máximo de grabación
-    if (conv == THINK && voice::answerReady && el > 600) { voice::answerReady = false; conv = TALK; convStart = ms; answer = voice::answerText; voice::play(voice::CHATTER); }
-    else if (conv == THINK && el > 35000) { conv = TALK; convStart = ms; answer = "Me quede pensando... proba de nuevo"; voice::play(voice::CHATTER); }
+    if (conv == THINK && voice::answerReady && el > 600) { voice::answerReady = false; conv = TALK; convStart = ms; answer = voice::answerText; voice::play(voice::spkLen ? voice::SPEAK : voice::CHATTER); }
+    else if (conv == THINK && el > 50000) { conv = TALK; convStart = ms; answer = "Me quede pensando... proba de nuevo"; voice::play(voice::CHATTER); }
     else if (conv == TALK && el > 400 && !voice::busy) { conv = HAPPY; convStart = ms; }
     else if (conv == HAPPY && el > 4000) { inConv = false; ch.nextThink = t + 4; answer = ""; }
   }

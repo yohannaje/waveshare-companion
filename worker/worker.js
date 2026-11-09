@@ -3,16 +3,23 @@
 // GET  /lista: lista de compras en JSON (para el tablero)
 // Regla: costo cero. Tope diario propio muy por debajo de los límites gratis.
 
-const MAX_POR_DIA = 60;            // preguntas por día (Workers AI gratis: 10.000 neuronas/día)
+const MAX_POR_DIA = 40;            // preguntas por día. Con voz son ~200 neuronas cada una -> 8.000 de las 10.000 gratis por día
 const MAX_SEGUNDOS = 10;           // audio máximo
 const CORDOBA = { lat: 37.8882, lon: -4.7794 };
 // Feriados locales de Córdoba capital (tradicionales: Virgen de la Fuensanta y San Rafael). Corregir si cambian.
 const LOCALES_CORDOBA = ["2026-09-08", "2026-10-24", "2027-09-08", "2027-10-25"];
 const STT = "@cf/openai/whisper-large-v3-turbo";
 const LLM = "@cf/meta/llama-3.1-8b-instruct-fast";
+const TTS = "@cf/deepgram/aura-2-es";   // 2727 neuronas cada 1000 letras
+const VOZ = "celeste";
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" };
 function text(s, status) { return new Response(s, { status: status || 200, headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS } }); }
+function conVoz(pantalla, hablado) {
+  const h = { "Content-Type": "text/plain; charset=utf-8", "Access-Control-Expose-Headers": "X-Voz", ...CORS };
+  h["X-Voz"] = encodeURIComponent(String(hablado || pantalla).replace(/[\r\n]+/g, " ").slice(0, 90));
+  return new Response(pantalla, { headers: h });
+}
 function json(o) { return new Response(JSON.stringify(o), { headers: { "Content-Type": "application/json", ...CORS } }); }
 function sinTildes(s) { return s.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[¿¡]/g, "").replace(/[^\x20-\x7E]/g, ""); }
 
@@ -83,6 +90,22 @@ export default {
     const url = new URL(req.url);
     if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
     if (url.pathname === "/lista") return json({ lista: JSON.parse((await env.KV.get("lista")) || "[]") });
+    if (url.pathname === "/voz" && req.method === "POST") {
+      const dev = req.headers.get("X-Device") || "";
+      if (!dev || dev !== (await env.KV.get("aparato"))) return text("No te conozco", 403);
+      const clave = "v:" + hoyMadrid().iso;
+      const n = parseInt((await env.KV.get(clave)) || "0");
+      if (n >= MAX_POR_DIA) return text("tope", 429);
+      let frase = "";
+      try { frase = decodeURIComponent(await req.text()); } catch (e) { frase = ""; }
+      frase = frase.trim().slice(0, 90);
+      if (!frase) return text("vacio", 400);
+      await env.KV.put(clave, String(n + 1), { expirationTtl: 172800 });
+      try {
+        const r = await env.AI.run(TTS, { text: frase, speaker: VOZ, encoding: "linear16", container: "none", sample_rate: 16000 }, { returnRawResponse: true });
+        return new Response(r.body, { headers: { "Content-Type": "application/octet-stream", ...CORS } });
+      } catch (e) { return text("sin voz", 500); }
+    }
     if (url.pathname !== "/ask" || req.method !== "POST") return text("Companero listo");
 
     // Solo responde al primer aparato que se conectó (tu Waveshare).
@@ -145,9 +168,9 @@ export default {
       let i = 0;
       for (; i < nueva.length; i++) { const add = (i ? ", " : "") + nueva[i]; if ((t + add).length > 60) break; t += add; }
       if (i < nueva.length) t += " y " + (nueva.length - i) + " mas";
-      return text(sinTildes(t).slice(0, 68));
+      return conVoz(sinTildes(t).slice(0, 68), t);
     }
-    const resp = sinTildes(String(res.respuesta || "Mmm, no se que decir.")).slice(0, 68);
-    return text(resp);
+    const hablado = String(res.respuesta || "Mmm, no sé qué decir.").replace(/[{}"]/g, "").slice(0, 68);
+    return conVoz(sinTildes(hablado).slice(0, 68), hablado);
   }
 };
