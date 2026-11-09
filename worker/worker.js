@@ -11,7 +11,7 @@ const LOCALES_CORDOBA = ["2026-09-08", "2026-10-24", "2027-09-08", "2027-10-25"]
 const STT = "@cf/openai/whisper-large-v3-turbo";
 const LLM = "@cf/meta/llama-3.1-8b-instruct-fast";
 const TTS = "@cf/deepgram/aura-2-es";   // 2727 neuronas cada 1000 letras
-const VOZ = "celeste";
+const VOCES = ["antonia", "aquila"];   // antonia = argentina; si no esta disponible, aquila (latinoamericana neutra)
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" };
 function text(s, status) { return new Response(s, { status: status || 200, headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS } }); }
@@ -101,10 +101,14 @@ export default {
       frase = frase.trim().slice(0, 90);
       if (!frase) return text("vacio", 400);
       await env.KV.put(clave, String(n + 1), { expirationTtl: 172800 });
-      try {
-        const r = await env.AI.run(TTS, { text: frase, speaker: VOZ, encoding: "linear16", container: "none", sample_rate: 16000 }, { returnRawResponse: true });
-        return new Response(r.body, { headers: { "Content-Type": "application/octet-stream", ...CORS } });
-      } catch (e) { return text("sin voz", 500); }
+      for (const v of VOCES) {
+        try {
+          const r = await env.AI.run(TTS, { text: frase, speaker: v, encoding: "linear16", container: "none", sample_rate: 16000 }, { returnRawResponse: true });
+          if (!r.ok) continue;
+          return new Response(r.body, { headers: { "Content-Type": "application/octet-stream", "X-Voz-Usada": v, "Access-Control-Expose-Headers": "X-Voz-Usada", ...CORS } });
+        } catch (e) { /* prueba la siguiente voz */ }
+      }
+      return text("sin voz", 500);
     }
     if (url.pathname !== "/ask" || req.method !== "POST") return text("Companero listo");
 
