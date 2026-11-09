@@ -83,6 +83,10 @@ export default {
     const url = new URL(req.url);
     if (req.method === "OPTIONS") return new Response(null, { headers: CORS });
     if (url.pathname === "/lista") return json({ lista: JSON.parse((await env.KV.get("lista")) || "[]") });
+    if (url.pathname === "/probar") {
+      try { const r = await env.AI.run(LLM, { messages: [{ role: "user", content: "Responde solo: hola" }], max_tokens: 20 }); return text("OK " + JSON.stringify(r).slice(0, 300)); }
+      catch (e) { return text("ERR " + String(e && e.message || e).slice(0, 400)); }
+    }
     if (url.pathname !== "/ask" || req.method !== "POST") return text("Companero listo");
 
     // Solo responde al primer aparato que se conectó (tu Waveshare).
