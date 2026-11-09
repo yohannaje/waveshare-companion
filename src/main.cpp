@@ -90,7 +90,21 @@ static void oell(float cx, float cy, int rx, int ry, uint16_t f) { ellipse(cx, c
 
 // ---------- hora, cielo ----------
 static float nightAmt(float h) { if (h >= 8 && h < 18) return 0; if (h >= 18 && h < 21) return (h - 18) / 3; if (h >= 5 && h < 8) return 1 - (h - 5) / 3; return 1; }
-static int sceneFor(float h) { if (h >= 6 && h < 10) return 0; if (h >= 10 && h < 15) return 1; if (h >= 15 && h < 19) return 3; return 2; }
+// Se muda de habitacion cada ROOM_MINUTES minutos, siguiendo un recorrido segun el momento del dia
+// (0 bano, 1 cocina, 2 living, 3 patio). De noche (23-6) duerme en el living.
+#define ROOM_MINUTES 8
+static int sceneFor(float h) {
+  if (h >= 23 || h < 6) return 2;
+  static const uint8_t P[4][6] = {
+    {0, 1, 0, 2, 1, 0},   // 6-10   manana: mas en el bano y la cocina
+    {1, 2, 1, 3, 1, 2},   // 10-15  mediodia: cocina, con salidas al patio
+    {3, 2, 3, 1, 3, 0},   // 15-19  tarde: patio
+    {2, 1, 2, 0, 2, 1},   // 19-23  noche: living
+  };
+  int per = h < 10 ? 0 : h < 15 ? 1 : h < 19 ? 2 : 3;
+  int slot = ((int)(h * 60)) / ROOM_MINUTES;
+  return P[per][slot % 6];
+}
 static bool sleepy(float h) { return h >= 23 || h < 6; }
 static uint16_t sky(float h) {
   static const float H[] = {0, 5, 7, 9, 17, 19, 21, 24};
