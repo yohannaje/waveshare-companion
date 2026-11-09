@@ -533,6 +533,14 @@ static void sensorsInit() {
   Wire.beginTransmission(TOUCH_ADDR);
   if (Wire.endTransmission() == 0) { hasTouch = true; i2cWrite(TOUCH_ADDR, 0xFE, 0x01); }                       // sin auto-sleep del touch
   Serial.printf("imu=0x%02X touch=%d\n", imuAddr, hasTouch);
+  // diagnostico en pantalla: que dispositivos I2C aparecen (para ajustar sensor/touch)
+  String found = "";
+  for (uint8_t ad = 0x08; ad < 0x78; ad++) { Wire.beginTransmission(ad); if (Wire.endTransmission() == 0) { char h[6]; snprintf(h, sizeof(h), "%02X ", ad); found += h; } }
+  canvas->fillScreen(RGB565_WHITE); canvas->setTextColor(C(0x2e2430)); canvas->setTextSize(2);
+  canvas->setCursor(10, 60); canvas->print(imuAddr ? "mov: ok" : "mov: NO");
+  canvas->setCursor(10, 84); canvas->print(hasTouch ? "touch: ok" : "touch: NO");
+  canvas->setCursor(10, 120); canvas->print("I2C:"); canvas->setCursor(10, 144); canvas->print(found);
+  canvas->flush(); delay(3500);
 }
 // sacudida: 3 golpes fuertes en menos de 1 s
 static bool shaken(uint32_t ms) {
