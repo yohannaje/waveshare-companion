@@ -11,7 +11,7 @@ const LOCALES_CORDOBA = ["2026-09-08", "2026-10-24", "2027-09-08", "2027-10-25"]
 const STT = "@cf/openai/whisper-large-v3-turbo";
 const LLM = "@cf/meta/llama-3.1-8b-instruct-fast";
 const TTS = "@cf/deepgram/aura-2-es";   // 2727 neuronas cada 1000 letras
-const VOCES = ["antonia", "aquila"];   // antonia = argentina; si no esta disponible, aquila (latinoamericana neutra)
+const VOCES = ["selena"];   // Cloudflare no ofrece las voces argentinas (antonia/hector): rechaza el nombre. selena = mujer latinoamericana neutra
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" };
 function text(s, status) { return new Response(s, { status: status || 200, headers: { "Content-Type": "text/plain; charset=utf-8", ...CORS } }); }
