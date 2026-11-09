@@ -1,0 +1,47 @@
+name: Compilar e instalar
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Instalar PlatformIO
+        run: pip install -U platformio
+      - name: Compilar firmware
+        run: pio run -e waveshare
+      - name: Armar la página de instalación
+        run: |
+          mkdir -p site/firmware
+          cp web/* site/
+          cp .pio/build/waveshare/bootloader.bin site/firmware/
+          cp .pio/build/waveshare/partitions.bin site/firmware/
+          cp .pio/build/waveshare/firmware.bin site/firmware/
+          BOOT_APP0=$(find ~/.platformio/packages -name boot_app0.bin | head -1)
+          cp "$BOOT_APP0" site/firmware/
+          echo "{\"built\":\"$(date -u +%Y-%m-%dT%H:%MZ)\",\"commit\":\"${GITHUB_SHA::7}\"}" > site/firmware/version.json
+          ls -la site site/firmware
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
