@@ -115,9 +115,9 @@ export default {
     const sistema =
       "Sos una mascota tierna que vive en un aparatito en una casa de Cordoba (Andalucia, Espana). " +
       "Hablas en espanol rioplatense, con carino y muy breve. " +
-      "Responde SOLO con un JSON asi: {\"respuesta\":\"...\",\"agregar\":[],\"quitar\":[],\"vaciar\":false}. " +
+      "Responde SOLO con un JSON asi: {\"respuesta\":\"...\",\"agregar\":[],\"quitar\":[],\"vaciar\":false,\"leer\":false}. " +
       "La respuesta tiene que tener como maximo 60 caracteres, sin emojis. " +
-      "Si piden anotar o agregar cosas a la lista de compras, ponelas en agregar (en minuscula). Si dicen que ya compraron algo o que lo saquen, en quitar. Si piden borrar toda la lista, vaciar true. " +
+      "Si piden anotar o agregar cosas a la lista de compras, ponelas en agregar (en minuscula). Si dicen que ya compraron algo o que lo saquen, en quitar. Si piden borrar toda la lista, vaciar true. Si preguntan que hay que comprar o piden leer la lista, leer true (la respuesta la completa el sistema). " +
       "Datos reales (usalos, no inventes): Fecha y hora: " + hoy.texto + ". " +
       "Proximos feriados (madrid=feriado en Madrid, donde trabaja su marido; cordoba=feriado en Cordoba): " + JSON.stringify(fer) + ". " +
       "Clima en Cordoba: " + cli + ". " +
@@ -136,6 +136,17 @@ export default {
     for (const q of (res.quitar || [])) { const x = String(q).toLowerCase().trim(); nueva = nueva.filter(i => i !== x); }
     if (JSON.stringify(nueva) !== JSON.stringify(lista)) await env.KV.put("lista", JSON.stringify(nueva.slice(0, 50)));
 
+    // Leer la lista lo arma el codigo (el modelo chico a veces la ignora).
+    const pideLista = /(que|qué).{0,25}(compr|falta|anot)|lista.{0,15}(compra|super|mercado)?|(leer|decime|dime|mostra).{0,15}lista/i.test(oido);
+    const modificó = (res.agregar && res.agregar.length) || (res.quitar && res.quitar.length) || res.vaciar === true;
+    if (res.leer === true || (pideLista && !modificó)) {
+      if (!nueva.length) return text("La lista esta vacia. Todo comprado!");
+      let t = "Hay que comprar: ";
+      let i = 0;
+      for (; i < nueva.length; i++) { const add = (i ? ", " : "") + nueva[i]; if ((t + add).length > 60) break; t += add; }
+      if (i < nueva.length) t += " y " + (nueva.length - i) + " mas";
+      return text(sinTildes(t).slice(0, 68));
+    }
     const resp = sinTildes(String(res.respuesta || "Mmm, no se que decir.")).slice(0, 68);
     return text(resp);
   }
