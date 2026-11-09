@@ -10,6 +10,7 @@
 #include <time.h>
 #include <math.h>
 #include "voice.h"
+#include <ImprovWiFiLibrary.h>
 
 // ---------- pines (de los ejemplos oficiales de Waveshare) ----------
 #define PIN_BL       46
@@ -23,6 +24,7 @@ Arduino_GFX *panel = new Arduino_ST7789(bus, 40 /*RST*/, 0, true, 240, 240);
 Arduino_Canvas *canvas = new Arduino_Canvas(240, 240, panel);
 
 WiFiManager wm;
+ImprovWiFi improv(&Serial);
 Preferences prefs;
 
 // ---------- colores ----------
@@ -362,10 +364,16 @@ void setup() {
   voice::begin();
 
   // WiFi sin bloquear la animación: si no hay red guardada abre la red "Waveshare-setup"
+  // Opción 1 (más fácil): cargar el WiFi desde la página de instalación en Chrome, por USB (protocolo Improv).
+  improv.setDeviceInfo(ImprovTypes::ChipFamily::CF_ESP32_S3, "Companero", "0.2", "Waveshare");
+  // Opción 2: red "Waveshare-setup" desde el celular.
   WiFi.mode(WIFI_STA);
+  wm.setDebugOutput(false);
   wm.setConfigPortalBlocking(false);
   wm.setTitle("Waveshare");
+  wm.setAPCallback([](WiFiManager *) { WiFi.setTxPower(WIFI_POWER_8_5dBm); });
   portalActive = !wm.autoConnect("Waveshare-setup");
+  if (portalActive) WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
   float h = nowHour();
   int i = sceneFor(h);
@@ -375,8 +383,13 @@ void setup() {
 
 static uint32_t lastMs = 0;
 void loop() {
+  improv.handleSerial();
   if (portalActive) { if (wm.process()) portalActive = false; }
-  if (!timeStarted && WiFi.status() == WL_CONNECTED) { configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.google.com"); timeStarted = true; portalActive = false; }
+  if (!timeStarted && WiFi.status() == WL_CONNECTED) {
+    if (portalActive) { wm.stopConfigPortal(); portalActive = false; }
+    WiFi.setTxPower(WIFI_POWER_19_5dBm);
+    configTzTime("CET-1CEST,M3.5.0,M10.5.0/3", "pool.ntp.org", "time.google.com"); timeStarted = true;
+  }
   pollButtons();
 
   uint32_t ms = millis();
@@ -441,8 +454,8 @@ void loop() {
     canvas->fillRoundRect(12, 176, 216, 52, 10, RGB565_WHITE);
     canvas->drawRoundRect(12, 176, 216, 52, 10, C(0x2e2430));
     canvas->setTextColor(C(0x2e2430)); canvas->setTextSize(2);
-    canvas->setCursor(24, 186); canvas->print("Conectate al WiFi");
-    canvas->setCursor(30, 206); canvas->print("Waveshare-setup");
+    canvas->setCursor(24, 186); canvas->print("Falta el WiFi:");
+    canvas->setCursor(24, 206); canvas->print("cargalo en Chrome");
   }
   canvas->flush();
 
